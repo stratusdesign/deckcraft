@@ -9,7 +9,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
+use egui::{Align2, Sense, Ui, pos2, vec2};
 
 use crate::files::{Files, Item};
 

@@ -16,7 +16,7 @@ android {
         fixed {
             storeFile file(System.getenv("GC_KEYSTORE") ?: "none")
             storePassword System.getenv("GC_KEY_PASSWORD")
-            keyAlias "deckcraft"
+            keyAlias "gridcraft"
             keyPassword System.getenv("GC_KEY_PASSWORD")
         }
     }
