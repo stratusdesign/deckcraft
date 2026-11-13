@@ -67,7 +67,7 @@ struct Tokens {
 
 impl Tokens {
     fn get(ctx: &egui::Context, accent: [u32; 3]) -> Tokens {
-        let dark = ctx.style().visuals.dark_mode;
+        let dark = ctx.global_style().visuals.dark_mode;
         let pick = |light: u32, dark_c: u32| {
             let c = if dark { dark_c } else { light };
             Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
