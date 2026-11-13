@@ -61,6 +61,18 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Documents ChromeOS handed over ("Open with", or DeckCraft as the default app): opened
+        // under their own name, so Save writes them back.
+        let opened = self.files.borrow_mut().take_opened();
+        for o in opened {
+            match o.and_then(|(path, uri, name)| std::fs::read(&path).map(|b| (uri, name, b)).map_err(|e| e.to_string())) {
+                Ok((uri, name, bytes)) => {
+                    self.named.borrow_mut().insert(name.clone(), uri);
+                    self.app.open_from_host(Some(&name), &bytes);
+                }
+                Err(e) => self.app.notify(e),
+            }
+        }
         let problems = self.files.borrow_mut().logic();
         if let Some(p) = problems.into_iter().last() {
             self.app.notify(p);

@@ -25,6 +25,8 @@ public class DeckcraftActivity extends NativeActivity {
     }
 
     static final int TREE = 3;
+    /** A document ChromeOS or another app asked us to open. */
+    static final int VIEW = 4;
     static final int RW = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
 
     static native void nativePicked(int kind, String uri, String name);
@@ -96,6 +98,36 @@ public class DeckcraftActivity extends NativeActivity {
         } catch (Exception e) {
             return "!" + e.getMessage();
         }
+    }
+
+    // "Open with" from the Files app, or this app as the default for a file type: the document
+    // arrives in the intent, at start-up or (the app already running) as a new intent.
+    @Override
+    protected void onCreate(android.os.Bundle saved) {
+        super.onCreate(saved);
+        opened(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        opened(intent);
+    }
+
+    void opened(Intent i) {
+        if (i == null || i.getData() == null) return;
+        String action = i.getAction();
+        if (!Intent.ACTION_VIEW.equals(action) && !Intent.ACTION_EDIT.equals(action)) return;
+        Uri uri = i.getData();
+        try {
+            // Keeps access after a restart where the sender allows it, so Save still reaches the file.
+            getContentResolver().takePersistableUriPermission(uri, i.getFlags() & RW);
+        } catch (Exception ignored) {
+        }
+        nativePicked(VIEW, uri.toString(), displayName(uri));
+        // Handled: a recreated activity mustn't open it again.
+        i.setAction(Intent.ACTION_MAIN);
+        i.setData(null);
     }
 
     @Override

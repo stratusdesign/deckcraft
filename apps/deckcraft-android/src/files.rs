@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 
 /// Folder picker answers waiting for the next frame: (location uri, display name).
 static PICKED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+/// Documents ChromeOS or another app asked us to open ("Open with"): (document uri, name).
+static OPENED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+/// `nativePicked`'s kind for a document handed to the app to open.
+const VIEW: jint = 4;
 static CTX: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
 /// The Java activity. ndk_context holds the Application instead, which has none of its methods.
 static ACTIVITY: AtomicUsize = AtomicUsize::new(0);
@@ -38,7 +42,7 @@ pub fn set_context(ctx: &egui::Context) {
 pub extern "system" fn Java_ai_storyteller_deckcraft_DeckcraftActivity_nativePicked(
     mut env: JNIEnv,
     _class: JClass,
-    _kind: jint,
+    kind: jint,
     uri: JString,
     name: JString,
 ) {
@@ -47,8 +51,9 @@ pub extern "system" fn Java_ai_storyteller_deckcraft_DeckcraftActivity_nativePic
     }
     let Ok(uri) = env.get_string(&uri).map(String::from) else { return };
     let name = if name.is_null() { None } else { env.get_string(&name).ok().map(String::from) };
-    if let Ok(mut q) = PICKED.lock() {
-        q.push((uri, name.unwrap_or_else(|| "Folder".into())));
+    let (queue, fallback) = if kind == VIEW { (&OPENED, "Document") } else { (&PICKED, "Folder") };
+    if let Ok(mut q) = queue.lock() {
+        q.push((uri, name.unwrap_or_else(|| fallback.into())));
     }
     if let Some(ctx) = CTX.get() {
         ctx.request_repaint();
@@ -263,6 +268,30 @@ impl Files {
         let (tree, doc) = split(folder)?;
         let list: Vec<(String, String, bool)> = serde_json::from_str(&ask("list", &[tree, doc])?).map_err(|e| e.to_string())?;
         Ok(list.into_iter().map(|(id, name, folder)| Item { id: join(tree, &id), name, detail: String::new(), folder }).collect())
+    }
+
+    /// Documents handed to the app to open since the last frame, each copied into a working copy
+    /// that saves back to it: Ok((working copy path, document uri, name)), or why it couldn't be read.
+    pub fn take_opened(&mut self) -> Vec<Result<(String, String, String), String>> {
+        let opened: Vec<_> = OPENED.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        let mut out = Vec::new();
+        for (uri, name) in opened {
+            let Some(path) = self.copy_path(&uri, &name) else {
+                out.push(Err(format!("{name}: no room for a working copy")));
+                continue;
+            };
+            let p = path.to_string_lossy().into_owned();
+            match copy("copyIn", &uri, &p) {
+                Ok(()) => {
+                    self.docs.insert(p.clone(), uri.clone());
+                    self.synced.insert(p.clone(), stamp(&path));
+                    self.store();
+                    out.push(Ok((p, uri, name)));
+                }
+                Err(e) => out.push(Err(format!("{name}: {e}"))),
+            }
+        }
+        out
     }
 
     /// A local working copy of `file` (in `folder`, called `folder_name`) to open; saving it saves
