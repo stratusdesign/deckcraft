@@ -1,0 +1,58 @@
+# DeckCraft as an Android app (.apk) — runs on Android and natively on ChromeOS.
+# One APK for arm64 (most phones, ARM Chromebooks) and x86_64 (Intel/AMD Chromebooks).
+# Rust builds the app library with cargo-ndk; Gradle packages it with the Java activity that
+# reaches the user's folders (apps/deckcraft-android/android).
+name: Android
+
+on:
+  push:
+    branches: [android]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Build the app library
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk --platform 28 -t arm64-v8a -t x86_64 \
+            -o apps/deckcraft-android/android/app/src/main/jniLibs \
+            build --release -p deckcraft-android
+      - name: Package the APK
+        working-directory: apps/deckcraft-android/android
+        # The fixed signing key (repo secrets), so a new build installs over the old one.
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          GC_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/deckcraft.p12"
+            export GC_KEYSTORE="$RUNNER_TEMP/deckcraft.p12"
+          fi
+          gradle --no-daemon assembleDebug
+      - name: Name the APK
+        run: cp apps/deckcraft-android/android/app/build/outputs/apk/debug/app-debug.apk deckcraft-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deckcraft-android-apk
+          path: deckcraft-android.apk
+          if-no-files-found: error

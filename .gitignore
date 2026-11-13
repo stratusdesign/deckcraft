@@ -12,3 +12,9 @@ packaging/env.sh
 /packaging/linux/flatpak/cargo-sources.json
 /build-flatpak/
 /.flatpak-builder/
+
+# Android build output
+apps/deckcraft-android/android/app/src/main/jniLibs/
+apps/deckcraft-android/android/app/build/
+apps/deckcraft-android/android/.gradle/
+apps/deckcraft-android/android/build/

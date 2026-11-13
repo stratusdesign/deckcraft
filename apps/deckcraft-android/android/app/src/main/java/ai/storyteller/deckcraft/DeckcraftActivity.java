@@ -1,0 +1,171 @@
+package ai.storyteller.deckcraft;
+
+import android.app.NativeActivity;
+import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.DocumentsContract;
+import android.provider.OpenableColumns;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+
+/**
+ * DeckCraft's window (a NativeActivity running the Rust app) plus what Rust can't do alone on
+ * Android: reach the user's folders. Adding a location asks the system folder picker, whose
+ * answer only reaches a Java activity (nativePicked); after that Rust lists folders, makes files,
+ * and copies documents in and out of their working copies through the methods below.
+ */
+public class DeckcraftActivity extends NativeActivity {
+    static {
+        // Loaded here as well as by NativeActivity, so the JVM can find nativePicked.
+        System.loadLibrary("deckcraft_android");
+    }
+
+    static final int TREE = 3;
+    static final int RW = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+
+    static native void nativePicked(int kind, String uri, String name);
+
+    /** The MIME type a new file gets, from its extension. */
+    static String mimeFor(String name) {
+        int dot = name.lastIndexOf('.');
+        String ext = dot < 0 ? "" : name.substring(dot + 1).toLowerCase();
+        String mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+        return mime == null ? "application/octet-stream" : mime;
+    }
+
+    /** Add a location: the user picks a folder DeckCraft may use (My files, Drive, …). */
+    public void pickTree() {
+        runOnUiThread(() -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(RW | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            startActivityForResult(i, TREE);
+        });
+    }
+
+    // Folder browsing for DeckCraft's own Open and Save As pages. Answers start with '+' (the
+    // value follows) or '!' (an error message follows).
+
+    /** The top folder of a location. */
+    public String rootId(String tree) {
+        try {
+            return "+" + DocumentsContract.getTreeDocumentId(Uri.parse(tree));
+        } catch (Exception e) {
+            return "!" + e.getMessage();
+        }
+    }
+
+    /** A folder's contents: a JSON list of [id, name, is a folder]. */
+    public String list(String tree, String folder) {
+        Uri t = Uri.parse(tree);
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(t, folder);
+        String[] cols = {
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+        };
+        org.json.JSONArray out = new org.json.JSONArray();
+        try (Cursor c = getContentResolver().query(children, cols, null, null, null)) {
+            if (c == null) return "!this folder can't be read";
+            while (c.moveToNext()) {
+                boolean dir = DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2));
+                org.json.JSONArray item = new org.json.JSONArray();
+                item.put(c.getString(0)).put(c.getString(1)).put(dir);
+                out.put(item);
+            }
+            return "+" + out;
+        } catch (Exception e) {
+            return "!" + e.getMessage();
+        }
+    }
+
+    /** The document uri of `doc` inside a location. */
+    public String docUri(String tree, String doc) {
+        return DocumentsContract.buildDocumentUriUsingTree(Uri.parse(tree), doc).toString();
+    }
+
+    /** A new file `name` in `folder`; its document uri. */
+    public String create(String tree, String folder, String name) {
+        try {
+            Uri parent = DocumentsContract.buildDocumentUriUsingTree(Uri.parse(tree), folder);
+            Uri made = DocumentsContract.createDocument(getContentResolver(), parent, mimeFor(name), name);
+            return made == null ? "!the file couldn't be made" : "+" + made;
+        } catch (Exception e) {
+            return "!" + e.getMessage();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        Uri uri = (result == RESULT_OK && data != null) ? data.getData() : null;
+        String name = null;
+        if (uri != null) {
+            try {
+                // Keeps access after a restart, so Save still reaches the file.
+                getContentResolver().takePersistableUriPermission(uri, data.getFlags() & RW);
+            } catch (Exception ignored) {
+            }
+            name = treeName(uri);
+        }
+        nativePicked(request, uri == null ? null : uri.toString(), name);
+    }
+
+    String treeName(Uri tree) {
+        try {
+            return displayName(DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree)));
+        } catch (Exception e) {
+            return "Folder";
+        }
+    }
+
+    String displayName(Uri uri) {
+        try (Cursor c = getContentResolver().query(uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getString(0);
+        } catch (Exception ignored) {
+        }
+        String last = uri.getLastPathSegment();
+        return last == null ? "Book.xlsx" : last.substring(last.lastIndexOf('/') + 1);
+    }
+
+    /** The picked document into the working copy at `path`. Empty string = success. */
+    public String copyIn(String uri, String path) {
+        try (InputStream in = getContentResolver().openInputStream(Uri.parse(uri));
+             OutputStream out = new FileOutputStream(path)) {
+            if (in == null) return "the file couldn't be read";
+            pump(in, out);
+            return "";
+        } catch (Exception e) {
+            return String.valueOf(e.getMessage());
+        }
+    }
+
+    /** The working copy at `path` back into the picked document. Empty string = success. */
+    public String copyOut(String path, String uri) {
+        Uri u = Uri.parse(uri);
+        OutputStream out = null;
+        try {
+            try {
+                out = getContentResolver().openOutputStream(u, "wt");
+            } catch (Exception e) {
+                out = getContentResolver().openOutputStream(u, "w");
+            }
+            if (out == null) return "the file couldn't be written";
+            try (InputStream in = new FileInputStream(path)) {
+                pump(in, out);
+            }
+            out.close();
+            return "";
+        } catch (Exception e) {
+            return String.valueOf(e.getMessage());
+        }
+    }
+
+    static void pump(InputStream in, OutputStream out) throws java.io.IOException {
+        byte[] buf = new byte[65536];
+        for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+    }
+}
