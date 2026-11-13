@@ -10,6 +10,7 @@
 
 mod browser;
 mod files;
+mod page;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;

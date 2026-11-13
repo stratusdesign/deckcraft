@@ -9,11 +9,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use egui::{Align2, Sense, Ui, pos2, vec2};
 
 use crate::files::{Files, Item};
+use crate::page;
 
-const SIDE_W: f32 = 220.0;
+/// DeckCraft's colour for the page's left column (GridCraft's is green); see [`page::View::accent`].
+const ACCENT: [u32; 3] = [0xC43E1C, 0x4A2A1F, 0xF8E1D9];
 
 const PRESENTATIONS: &[&str] = &["deckcraft", "pptx", "potx", "ppsx", "txt", "md"];
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"];
@@ -55,29 +56,6 @@ pub struct Browser {
     note: Option<String>,
 }
 
-fn row(ui: &mut Ui, icon: &str, name: &str, detail: &str, selected: bool) -> egui::Response {
-    let visuals = ui.visuals().clone();
-    let height = if detail.is_empty() { 30.0 } else { 42.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
-    let p = ui.painter();
-    if selected {
-        p.rect_filled(rect, 4.0, visuals.selection.bg_fill);
-    } else if resp.hovered() {
-        p.rect_filled(rect, 4.0, visuals.widgets.hovered.weak_bg_fill);
-    }
-    let text = visuals.text_color();
-    let font = egui::FontId::proportional(14.0);
-    p.text(pos2(rect.left() + 16.0, rect.center().y), Align2::CENTER_CENTER, icon, font.clone(), text);
-    let clip = p.with_clip_rect(rect.intersect(p.clip_rect()));
-    if detail.is_empty() {
-        clip.text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, name, font, text);
-    } else {
-        clip.text(pos2(rect.left() + 34.0, rect.center().y - 8.0), Align2::LEFT_CENTER, name, font, text);
-        clip.text(pos2(rect.left() + 34.0, rect.center().y + 9.0), Align2::LEFT_CENTER, detail, egui::FontId::proportional(11.5), visuals.weak_text_color());
-    }
-    resp
-}
 
 /// The file types a dialog lists: `None` lists every file.
 fn wanted(ask: &Ask) -> Option<Vec<String>> {
@@ -147,124 +125,43 @@ impl Browser {
         let mut go = None;
         let mut picked = None;
         let mut save_now = false;
-        let size = ctx.content_rect().size();
-        let modal = egui::Modal::new(egui::Id::new("android_file_browser")).show(ctx, |ui| {
-            ui.set_width((size.x - 80.0).clamp(320.0, 900.0));
-            ui.heading(if saving { "Save As" } else { "Open" });
-            ui.add_space(8.0);
-            if saving {
-                ui.horizontal(|ui| {
-                    let label = ui.label("File name");
-                    let resp = ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(360.0)).labelled_by(label.id);
-                    if resp.changed() {
-                        self.replace = None;
-                    }
-                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let ready = !self.trail.is_empty() && !self.name.trim().is_empty();
-                    save_now = (ui.add_enabled(ready, egui::Button::new("Save")).clicked() || enter) && ready;
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
-                if self.replace.is_some() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{} already exists. Replace it?", self.name.trim()));
-                        if ui.button("Replace").clicked() {
-                            save_now = true;
-                        }
-                    });
-                }
-                ui.add_space(8.0);
-            }
-            if let Some(note) = &self.note {
-                ui.colored_label(ui.visuals().warn_fg_color, note);
-                ui.add_space(6.0);
-            }
-            let height = (size.y - 220.0).clamp(200.0, 560.0);
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(SIDE_W);
-                    egui::ScrollArea::vertical().id_salt("places").max_height(height).show(ui, |ui| {
-                        ui.strong("Locations");
-                        let at = self.trail.first().map(|(id, _)| id.clone());
-                        for p in &places {
-                            if row(ui, "📁", &p.name, "", at.as_deref() == Some(p.id.as_str())).clicked() {
-                                go = Some(p.clone());
-                            }
-                        }
-                        if row(ui, "+", "Add a location…", "", false).clicked() {
-                            add_place = true;
-                        }
-                        if !recent.is_empty() {
-                            ui.add_space(10.0);
-                            ui.strong("Recent folders");
-                            for r in &recent {
-                                if row(ui, "🕘", &r.name, &r.detail, false).clicked() {
-                                    go = Some(r.clone());
-                                }
-                            }
-                        }
-                    });
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    if self.trail.is_empty() {
-                        ui.label("Choose Add a location… and pick a folder DeckCraft may use, such as My files.");
-                        return;
-                    }
-                    let mut up = None;
-                    ui.horizontal_wrapped(|ui| {
-                        let last = self.trail.len() - 1;
-                        for (i, (_, name)) in self.trail.iter().enumerate() {
-                            if i > 0 {
-                                ui.label("›");
-                            }
-                            if i == last {
-                                ui.strong(name.as_str());
-                            } else if ui.link(name.as_str()).clicked() {
-                                up = Some(i);
-                            }
-                        }
-                    });
-                    if let Some(i) = up {
-                        let trail = self.trail[..=i].to_vec();
-                        self.go(trail);
-                        return;
-                    }
-                    ui.add_space(6.0);
-                    egui::ScrollArea::vertical().id_salt("listing").max_height(height).show(ui, |ui| match &self.listing {
-                        Some(Ok(items)) if items.is_empty() => {
-                            ui.weak("Nothing here to open.");
-                        }
-                        Some(Ok(items)) => {
-                            for item in items {
-                                let icon = if item.folder { "📁" } else { "📄" };
-                                let selected = saving && !item.folder && self.name.trim() == item.name;
-                                if row(ui, icon, &item.name, "", selected).clicked() {
-                                    picked = Some(item.clone());
-                                }
-                            }
-                        }
-                        Some(Err(e)) => {
-                            ui.weak(e.as_str());
-                        }
-                        None => {}
-                    });
-                });
-            });
-            if !saving {
-                ui.add_space(8.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
-            }
-        });
-        if modal.should_close() {
-            cancel = true;
+        let mut up = None;
+        let typed = self.name.clone();
+        let view = page::View {
+            title: if saving { "Save As" } else { "Open" },
+            app: "DeckCraft",
+            saving,
+            choosing_folder: false,
+            places: &places,
+            recent: &recent,
+            trail: &self.trail,
+            listing: self.listing.as_ref(),
+            replacing: self.replace.is_some(),
+            note: self.note.as_deref(),
+            accent: ACCENT,
+        };
+        let mut name = typed.clone();
+        let actions = page::show(ctx, &view, &mut name);
+        if name != typed {
+            // A different name drops the question about replacing the old one.
+            self.replace = None;
         }
-
+        self.name = name;
+        for action in actions {
+            match action {
+                page::Action::Cancel => cancel = true,
+                page::Action::AddPlace => add_place = true,
+                page::Action::Go(item) => go = Some(item),
+                page::Action::Pick(item) => picked = Some(item),
+                page::Action::Up(i) => up = Some(i),
+                page::Action::Save | page::Action::Replace => save_now = true,
+                page::Action::ChooseFolder => {}
+            }
+        }
+        if let Some(i) = up {
+            let trail = self.trail[..=i].to_vec();
+            self.go(trail);
+        }
         if add_place {
             Files::add_place();
         }
