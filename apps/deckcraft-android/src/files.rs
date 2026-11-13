@@ -21,10 +21,12 @@ use serde::{Deserialize, Serialize};
 
 /// Folder picker answers waiting for the next frame: (location uri, display name).
 static PICKED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
-/// Documents ChromeOS or another app asked us to open ("Open with"): (document uri, name).
-static OPENED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
-/// `nativePicked`'s kind for a document handed to the app to open.
+/// Documents ChromeOS or another app asked us to open ("Open with"): (document uri, name,
+/// whether the app may write it).
+static OPENED: Mutex<Vec<(String, String, bool)>> = Mutex::new(Vec::new());
+/// `nativePicked`'s kind for a document handed to the app to open, writable / read only.
 const VIEW: jint = 4;
+const VIEW_READ_ONLY: jint = 5;
 static CTX: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
 /// The Java activity. ndk_context holds the Application instead, which has none of its methods.
 static ACTIVITY: AtomicUsize = AtomicUsize::new(0);
@@ -51,9 +53,12 @@ pub extern "system" fn Java_ai_storyteller_deckcraft_DeckcraftActivity_nativePic
     }
     let Ok(uri) = env.get_string(&uri).map(String::from) else { return };
     let name = if name.is_null() { None } else { env.get_string(&name).ok().map(String::from) };
-    let (queue, fallback) = if kind == VIEW { (&OPENED, "Document") } else { (&PICKED, "Folder") };
-    if let Ok(mut q) = queue.lock() {
-        q.push((uri, name.unwrap_or_else(|| fallback.into())));
+    if kind == VIEW || kind == VIEW_READ_ONLY {
+        if let Ok(mut q) = OPENED.lock() {
+            q.push((uri, name.unwrap_or_else(|| "Document".into()), kind == VIEW));
+        }
+    } else if let Ok(mut q) = PICKED.lock() {
+        q.push((uri, name.unwrap_or_else(|| "Folder".into())));
     }
     if let Some(ctx) = CTX.get() {
         ctx.request_repaint();
@@ -180,6 +185,10 @@ struct Pending {
     existing: Option<String>,
     /// The working copy as last seen: written once it stops changing.
     seen: Option<(SystemTime, u64)>,
+    /// The document made for it, once made (so a retry doesn't make another).
+    uri: Option<String>,
+    /// Its last attempt failed (said once, retried until it works).
+    failed: bool,
 }
 
 /// Locations, recent folders, and the working copies with the documents they belong to.
@@ -190,6 +199,8 @@ pub struct Files {
     docs: HashMap<String, String>,
     /// working copy path → what it was when last copied back
     synced: HashMap<String, Option<(SystemTime, u64)>>,
+    /// Working copies whose copy back failed and is still owed (persisted in `unsynced.json`).
+    unsynced: std::collections::HashSet<String>,
     pending: HashMap<String, Pending>,
     /// Folders handed to the app to write into (exporting pages): local folder → (folder id,
     /// folder name, each file there as last seen, the files already put in the folder).
@@ -211,8 +222,10 @@ impl Files {
         let read = |name: &str| dir.as_ref().and_then(|d| std::fs::read(d.join(name)).ok());
         let docs: HashMap<String, String> = read("docs.json").and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let places = read("places.json").and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        let synced = docs.keys().map(|p| (p.clone(), stamp(Path::new(p)))).collect();
-        Files { dir, places, docs, synced, pending: HashMap::new(), out_dirs: HashMap::new(), last_check: Instant::now() }
+        let unsynced: std::collections::HashSet<String> = read("unsynced.json").and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        // A copy back still owed from last time counts as never written, so it is tried again.
+        let synced = docs.keys().map(|p| (p.clone(), if unsynced.contains(p) { None } else { stamp(Path::new(p)) })).collect();
+        Files { dir, places, docs, synced, unsynced, pending: HashMap::new(), out_dirs: HashMap::new(), last_check: Instant::now() }
     }
 
     fn store(&self) {
@@ -223,6 +236,9 @@ impl Files {
         }
         if let Ok(b) = serde_json::to_vec_pretty(&self.places) {
             let _ = std::fs::write(d.join("places.json"), b);
+        }
+        if let Ok(b) = serde_json::to_vec_pretty(&self.unsynced) {
+            let _ = std::fs::write(d.join("unsynced.json"), b);
         }
     }
 
@@ -271,11 +287,12 @@ impl Files {
     }
 
     /// Documents handed to the app to open since the last frame, each copied into a working copy
-    /// that saves back to it: Ok((working copy path, document uri, name)), or why it couldn't be read.
-    pub fn take_opened(&mut self) -> Vec<Result<(String, String, String), String>> {
+    /// that saves back to it when the sender let the app write it: Ok((working copy path, document
+    /// uri, name, writable)), or why it couldn't be read.
+    pub fn take_opened(&mut self) -> Vec<Result<(String, String, String, bool), String>> {
         let opened: Vec<_> = OPENED.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         let mut out = Vec::new();
-        for (uri, name) in opened {
+        for (uri, name, writable) in opened {
             let Some(path) = self.copy_path(&uri, &name) else {
                 out.push(Err(format!("{name}: no room for a working copy")));
                 continue;
@@ -283,10 +300,13 @@ impl Files {
             let p = path.to_string_lossy().into_owned();
             match copy("copyIn", &uri, &p) {
                 Ok(()) => {
-                    self.docs.insert(p.clone(), uri.clone());
-                    self.synced.insert(p.clone(), stamp(&path));
-                    self.store();
-                    out.push(Ok((p, uri, name)));
+                    // Read only: saving keeps the working copy; Save As puts it somewhere.
+                    if writable {
+                        self.docs.insert(p.clone(), uri.clone());
+                        self.synced.insert(p.clone(), stamp(&path));
+                        self.store();
+                    }
+                    out.push(Ok((p, uri, name, writable)));
                 }
                 Err(e) => out.push(Err(format!("{name}: {e}"))),
             }
@@ -325,6 +345,8 @@ impl Files {
                 name: name.into(),
                 existing: existing.map(|f| f.id.clone()),
                 seen: None,
+                uri: None,
+                failed: false,
             },
         );
         Ok(p)
@@ -412,16 +434,23 @@ impl Files {
     }
 
     /// Puts a written Save As working copy into its folder.
-    fn finish(&mut self, path: &str, p: Pending) -> Result<(), String> {
-        let (tree, doc) = split(&p.folder)?;
-        let uri = match &p.existing {
-            Some(id) => {
+    /// Done (and no longer pending) only once the copy is in the document.
+    fn finish(&mut self, path: &str) -> Result<(), String> {
+        let Some(p) = self.pending.get_mut(path) else { return Ok(()) };
+        let uri = match (&p.uri, &p.existing) {
+            (Some(uri), _) => uri.clone(),
+            (None, Some(id)) => {
                 let (t, d) = split(id)?;
                 doc_uri(t, d)?
             }
-            None => ask("create", &[tree, doc, &p.name])?,
+            (None, None) => {
+                let (tree, doc) = split(&p.folder)?;
+                ask("create", &[tree, doc, &p.name])?
+            }
         };
+        p.uri = Some(uri.clone());
         copy("copyOut", path, &uri)?;
+        let Some(p) = self.pending.remove(path) else { return Ok(()) };
         self.synced.insert(path.to_string(), stamp(Path::new(path)));
         self.docs.insert(path.to_string(), uri);
         self.used(&p.folder, &p.folder_name);
@@ -457,11 +486,11 @@ impl Files {
                 p.seen = now;
                 continue;
             }
-            if let Some(p) = self.pending.remove(&path) {
-                let name = p.name.clone();
-                if let Err(e) = self.finish(&path, p) {
-                    problems.push(format!("{name} was saved here, but couldn't be put in its folder: {e}"));
-                }
+            if let Err(e) = self.finish(&path)
+                && let Some(p) = self.pending.get_mut(&path)
+                && !std::mem::replace(&mut p.failed, true)
+            {
+                problems.push(format!("{} was saved here, but couldn't be put in its folder yet (trying again): {e}", p.name));
             }
         }
         problems.extend(self.drain_out_dirs());
@@ -477,9 +506,20 @@ impl Files {
             if now.is_none() || self.synced.get(p).copied().flatten() == now {
                 continue;
             }
-            self.synced.insert(p.clone(), now);
-            if let Err(e) = copy("copyOut", p, uri) {
-                problems.push(format!("Saved here, but it couldn't be written back to the original file: {e}"));
+            match copy("copyOut", p, uri) {
+                Ok(()) => {
+                    self.synced.insert(p.clone(), now);
+                    if self.unsynced.remove(p) {
+                        self.store();
+                    }
+                }
+                // Not marked written: tried again at every check, and after a restart.
+                Err(e) => {
+                    if self.unsynced.insert(p.clone()) {
+                        self.store();
+                        problems.push(format!("Saved here, but it couldn't be written back to the original file yet (trying again): {e}"));
+                    }
+                }
             }
         }
         problems

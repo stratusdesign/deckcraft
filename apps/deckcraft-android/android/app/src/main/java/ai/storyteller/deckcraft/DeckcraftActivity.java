@@ -27,6 +27,7 @@ public class DeckcraftActivity extends NativeActivity {
     static final int TREE = 3;
     /** A document ChromeOS or another app asked us to open. */
     static final int VIEW = 4;
+    static final int VIEW_READ_ONLY = 5;
     static final int RW = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
 
     static native void nativePicked(int kind, String uri, String name);
@@ -114,6 +115,11 @@ public class DeckcraftActivity extends NativeActivity {
         opened(intent);
     }
 
+    /** Whether the sender let this app write the document (Open with may give read only). */
+    boolean canWrite(Uri uri) {
+        return checkCallingOrSelfUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
     void opened(Intent i) {
         if (i == null || i.getData() == null) return;
         String action = i.getAction();
@@ -124,7 +130,7 @@ public class DeckcraftActivity extends NativeActivity {
             getContentResolver().takePersistableUriPermission(uri, i.getFlags() & RW);
         } catch (Exception ignored) {
         }
-        nativePicked(VIEW, uri.toString(), displayName(uri));
+        nativePicked(canWrite(uri) ? VIEW : VIEW_READ_ONLY, uri.toString(), displayName(uri));
         // Handled: a recreated activity mustn't open it again.
         i.setAction(Intent.ACTION_MAIN);
         i.setData(null);
@@ -165,12 +171,18 @@ public class DeckcraftActivity extends NativeActivity {
 
     /** The picked document into the working copy at `path`. Empty string = success. */
     public String copyIn(String uri, String path) {
-        try (InputStream in = getContentResolver().openInputStream(Uri.parse(uri));
-             OutputStream out = new FileOutputStream(path)) {
+        // Read into a temporary file and replace the working copy only once it is complete, so a
+        // failed read never damages the copy already there.
+        java.io.File part = new java.io.File(path + ".part");
+        try (InputStream in = getContentResolver().openInputStream(Uri.parse(uri))) {
             if (in == null) return "the file couldn't be read";
-            pump(in, out);
+            try (OutputStream out = new FileOutputStream(part)) {
+                pump(in, out);
+            }
+            if (!part.renameTo(new java.io.File(path))) return "the working copy couldn't be replaced";
             return "";
         } catch (Exception e) {
+            part.delete();
             return String.valueOf(e.getMessage());
         }
     }

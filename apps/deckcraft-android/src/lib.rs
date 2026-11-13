@@ -65,10 +65,16 @@ impl eframe::App for App {
         // under their own name, so Save writes them back.
         let opened = self.files.borrow_mut().take_opened();
         for o in opened {
-            match o.and_then(|(path, uri, name)| std::fs::read(&path).map(|b| (uri, name, b)).map_err(|e| e.to_string())) {
-                Ok((uri, name, bytes)) => {
-                    self.named.borrow_mut().insert(name.clone(), uri);
+            match o.and_then(|(path, uri, name, writable)| std::fs::read(&path).map(|b| (uri, name, writable, b)).map_err(|e| e.to_string())) {
+                Ok((uri, name, writable, bytes)) => {
+                    // Read only: no file to save back to, so Save asks where to put it.
+                    if writable {
+                        self.named.borrow_mut().insert(name.clone(), uri);
+                    }
                     self.app.open_from_host(Some(&name), &bytes);
+                    if !writable {
+                        self.app.notify(format!("{name} was opened read only. Save asks where to put your changes."));
+                    }
                 }
                 Err(e) => self.app.notify(e),
             }
