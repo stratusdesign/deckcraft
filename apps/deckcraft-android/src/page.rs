@@ -1,8 +1,9 @@
 //! The Open / Save As page, drawn like GridCraft's File › Open and File › Save As pages on Android
 //! (gridcraft `crates/ui-egui/src/backstage/browser.rs`), so every Craft app on Android picks and
-//! saves files the same way: a full-window page with a coloured column on the left (Back), a large
-//! title, then the locations and recent folders beside the folder's contents, and when saving a
-//! file name box with Save above them. The same file is in each app's Android crate; keep them
+//! saves files the same way: the locations and recent folders beside the folder's contents, and
+//! when saving a file name box with Save above them. [`show_in`] draws it inside the app's own
+//! File page, as GridCraft does; [`show`] draws it over the window, with a coloured column (Back)
+//! and a title, for dialogs asked from elsewhere (Export, Insert Picture…). The same file is in each app's Android crate; keep them
 //! identical. Only drawing is here: what a click does is the caller's ([`Action`]).
 
 use egui::epaint::{PathShape, PathStroke};
@@ -202,106 +203,124 @@ pub fn show(ctx: &egui::Context, view: &View, name: &mut String) -> Vec<Action> 
             ui.set_max_width(CONTENT_W.min(content.width()));
             ui.label(RichText::new(view.title).font(FontId::proportional(28.0)).color(t.text));
             ui.add_space(18.0);
-            if view.saving {
-                ui.horizontal(|ui| {
-                    let label = ui.label("File name");
-                    let resp = ui.add(egui::TextEdit::singleline(name).desired_width(360.0)).labelled_by(label.id);
-                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let ready = !view.trail.is_empty() && !name.trim().is_empty();
-                    if (ui.add_enabled(ready, egui::Button::new("Save")).clicked() || enter) && ready {
-                        out.push(Action::Save);
-                    }
-                });
-                if view.replacing {
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        dim(ui, &t, &format!("{} already exists. Replace it?", name.trim()));
-                        if ui.button("Replace").clicked() {
-                            out.push(Action::Replace);
-                        }
-                    });
-                }
-                ui.add_space(16.0);
-            }
-            if view.choosing_folder {
-                let ready = !view.trail.is_empty();
-                if ui.add_enabled(ready, egui::Button::new("Choose this folder")).clicked() {
-                    out.push(Action::ChooseFolder);
-                }
-                ui.add_space(16.0);
-            }
-            if let Some(note) = view.note {
-                ui.colored_label(ui.visuals().warn_fg_color, note);
-                ui.add_space(8.0);
-            }
-            let height = (ui.available_height() - 8.0).max(120.0);
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(SIDE_W);
-                    egui::ScrollArea::vertical().id_salt("android_file_places").max_height(height).show(ui, |ui| {
-                        section(ui, &t, "Locations");
-                        let at = view.trail.first().map(|(id, _)| id.as_str());
-                        for p in view.places {
-                            if row(ui, &t, Icon::Folder, &p.name, "", at == Some(p.id.as_str())).clicked() {
-                                out.push(Action::Go(p.clone()));
-                            }
-                        }
-                        if row(ui, &t, Icon::Plus, "Add a location…", "", false).clicked() {
-                            out.push(Action::AddPlace);
-                        }
-                        if !view.recent.is_empty() {
-                            ui.add_space(14.0);
-                            section(ui, &t, "Recent folders");
-                            for r in view.recent {
-                                if row(ui, &t, Icon::Clock, &r.name, &r.detail, false).clicked() {
-                                    out.push(Action::Go(r.clone()));
-                                }
-                            }
-                        }
-                    });
-                });
-                ui.add_space(24.0);
-                ui.vertical(|ui| {
-                    ui.set_width((CONTENT_W - SIDE_W - 24.0).min(ui.available_width()).max(200.0));
-                    if view.trail.is_empty() {
-                        dim(ui, &t, &format!("Choose Add a location… and pick a folder {} may use, such as My files.", view.app));
-                        return;
-                    }
-                    // Where we are: each folder on the way down can be clicked to go back up to it.
-                    ui.horizontal_wrapped(|ui| {
-                        let last = view.trail.len() - 1;
-                        for (i, (_, folder)) in view.trail.iter().enumerate() {
-                            if i > 0 {
-                                ui.label("›");
-                            }
-                            if i == last {
-                                ui.label(RichText::new(folder.as_str()).strong());
-                            } else if ui.link(folder.as_str()).clicked() {
-                                out.push(Action::Up(i));
-                            }
-                        }
-                    });
-                    ui.add_space(8.0);
-                    egui::ScrollArea::vertical().id_salt("android_file_listing").max_height(height).show(ui, |ui| match view.listing {
-                        Some(Ok(items)) if items.is_empty() => dim(ui, &t, "Nothing here to open."),
-                        Some(Ok(items)) => {
-                            for item in items {
-                                let icon = if item.folder { Icon::Folder } else { Icon::File };
-                                let selected = view.saving && !item.folder && name.trim() == item.name;
-                                if row(ui, &t, icon, &item.name, "", selected).clicked() {
-                                    out.push(Action::Pick(item.clone()));
-                                }
-                            }
-                        }
-                        Some(Err(e)) => dim(ui, &t, e),
-                        None => {}
-                    });
-                });
-            });
+            body(ui, &t, view, name, &mut out);
         });
     });
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         out.push(Action::Cancel);
     }
     out
+}
+
+/// Draws the page's contents inside `ui`: the app's own File › Open or File › Save As page,
+/// which already has the side column and the title. Returns what the user did.
+pub fn show_in(ui: &mut Ui, view: &View, name: &mut String) -> Vec<Action> {
+    let t = Tokens::get(ui.ctx(), view.accent);
+    let mut out = Vec::new();
+    ui.scope(|ui| {
+        ui.set_max_width(CONTENT_W.min(ui.available_width()));
+        body(ui, &t, view, name, &mut out);
+    });
+    out
+}
+
+/// The name box (Save As), the locations and recent folders, and the folder's contents.
+fn body(ui: &mut Ui, t: &Tokens, view: &View, name: &mut String, out: &mut Vec<Action>) {
+    if view.saving {
+        ui.horizontal(|ui| {
+            let label = ui.label("File name");
+            let resp = ui.add(egui::TextEdit::singleline(name).desired_width(360.0)).labelled_by(label.id);
+            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let ready = !view.trail.is_empty() && !name.trim().is_empty();
+            if (ui.add_enabled(ready, egui::Button::new("Save")).clicked() || enter) && ready {
+                out.push(Action::Save);
+            }
+        });
+        if view.replacing {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                dim(ui, t, &format!("{} already exists. Replace it?", name.trim()));
+                if ui.button("Replace").clicked() {
+                    out.push(Action::Replace);
+                }
+            });
+        }
+        ui.add_space(16.0);
+    }
+    if view.choosing_folder {
+        let ready = !view.trail.is_empty();
+        if ui.add_enabled(ready, egui::Button::new("Choose this folder")).clicked() {
+            out.push(Action::ChooseFolder);
+        }
+        ui.add_space(16.0);
+    }
+    if let Some(note) = view.note {
+        ui.colored_label(ui.visuals().warn_fg_color, note);
+        ui.add_space(8.0);
+    }
+    // To the bottom of the window, whatever the page around it scrolls.
+    let height = (ui.ctx().content_rect().bottom() - ui.cursor().top() - 24.0).max(120.0);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(SIDE_W);
+            egui::ScrollArea::vertical().id_salt("android_file_places").max_height(height).show(ui, |ui| {
+                section(ui, t, "Locations");
+                let at = view.trail.first().map(|(id, _)| id.as_str());
+                for p in view.places {
+                    if row(ui, t, Icon::Folder, &p.name, "", at == Some(p.id.as_str())).clicked() {
+                        out.push(Action::Go(p.clone()));
+                    }
+                }
+                if row(ui, t, Icon::Plus, "Add a location…", "", false).clicked() {
+                    out.push(Action::AddPlace);
+                }
+                if !view.recent.is_empty() {
+                    ui.add_space(14.0);
+                    section(ui, t, "Recent folders");
+                    for r in view.recent {
+                        if row(ui, t, Icon::Clock, &r.name, &r.detail, false).clicked() {
+                            out.push(Action::Go(r.clone()));
+                        }
+                    }
+                }
+            });
+        });
+        ui.add_space(24.0);
+        ui.vertical(|ui| {
+            ui.set_width((CONTENT_W - SIDE_W - 24.0).min(ui.available_width()).max(200.0));
+            if view.trail.is_empty() {
+                dim(ui, t, &format!("Choose Add a location… and pick a folder {} may use, such as My files.", view.app));
+                return;
+            }
+            // Where we are: each folder on the way down can be clicked to go back up to it.
+            ui.horizontal_wrapped(|ui| {
+                let last = view.trail.len() - 1;
+                for (i, (_, folder)) in view.trail.iter().enumerate() {
+                    if i > 0 {
+                        ui.label("›");
+                    }
+                    if i == last {
+                        ui.label(RichText::new(folder.as_str()).strong());
+                    } else if ui.link(folder.as_str()).clicked() {
+                        out.push(Action::Up(i));
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical().id_salt("android_file_listing").max_height(height).show(ui, |ui| match view.listing {
+                Some(Ok(items)) if items.is_empty() => dim(ui, t, "Nothing here to open."),
+                Some(Ok(items)) => {
+                    for item in items {
+                        let icon = if item.folder { Icon::Folder } else { Icon::File };
+                        let selected = view.saving && !item.folder && name.trim() == item.name;
+                        if row(ui, t, icon, &item.name, "", selected).clicked() {
+                            out.push(Action::Pick(item.clone()));
+                        }
+                    }
+                }
+                Some(Err(e)) => dim(ui, t, e),
+                None => {}
+            });
+        });
+    });
 }

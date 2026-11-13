@@ -511,13 +511,24 @@ impl SlideApp {
     /// bytes, the presentation is saved and that name is its file. Returns the name, or why it
     /// wasn't saved (also shown in the status bar).
     pub(super) fn save_to_host(&mut self, ext: Option<&str>) -> Result<String, String> {
-        use deckcraft_engine::cmd::file::{format_for_path, mark_saved, save_bytes};
         let Some(d) = self.session.active() else { return Err("no presentation is open".into()) };
         let own = d.path.as_deref().and_then(|p| std::path::Path::new(p).file_name()).map(|n| n.to_string_lossy().to_string());
         let (name, save_as) = match (ext, own) {
             (None, Some(own)) => (own, false),
             (ext, _) => (format!("{}.{}", d.title(), ext.unwrap_or("deckcraft")), true),
         };
+        self.save_to_host_named(name, save_as)
+    }
+
+    /// Android's File › Save As: save as a new file under the name typed there (its extension
+    /// gives the format), to the folder chosen there ([`crate::Services::file_page`]).
+    pub fn save_to_host_as(&mut self, name: &str) -> Result<String, String> {
+        self.save_to_host_named(name.to_string(), true)
+    }
+
+    fn save_to_host_named(&mut self, name: String, save_as: bool) -> Result<String, String> {
+        use deckcraft_engine::cmd::file::{format_for_path, mark_saved, save_bytes};
+        let Some(d) = self.session.active() else { return Err("no presentation is open".into()) };
         let saved = save_bytes(&d.doc, format_for_path(&name)).map_err(|e| e.to_string()).and_then(|bytes| {
             let host = self.services.host_save.as_mut().ok_or("no page to save to")?;
             host(&name, &bytes, save_as).map_err(|e| format!("Couldn't save {name}: {e}"))?;

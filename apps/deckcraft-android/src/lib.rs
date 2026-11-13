@@ -26,7 +26,7 @@ type Named = Rc<RefCell<HashMap<String, String>>>;
 
 struct App {
     app: SlideApp,
-    browser: browser::Browser,
+    browser: Rc<RefCell<browser::Browser>>,
     pending: browser::Pending,
     files: Rc<RefCell<files::Files>>,
     named: Named,
@@ -91,7 +91,13 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
-        if let Some(done) = self.browser.show(ui.ctx(), &self.pending, &self.files) {
+        // A presentation picked on File › Open (drawn in the page during `ui`).
+        let opened = self.browser.borrow_mut().opened.take();
+        if let Some(done) = opened {
+            self.done(done);
+        }
+        let done = self.browser.borrow_mut().show(ui.ctx(), &self.pending, &self.files);
+        if let Some(done) = done {
             self.done(done);
         }
     }
@@ -102,7 +108,14 @@ impl eframe::App for App {
 
 /// File services: open through the browser, Save back to the file a presentation came from (or
 /// through the browser when it has none), exports through the browser.
-fn services(pending: browser::Pending, files: Rc<RefCell<files::Files>>, named: Named, inbox: Inbox, ctx: egui::Context) -> Services {
+fn services(
+    pending: browser::Pending,
+    browser: Rc<RefCell<browser::Browser>>,
+    files: Rc<RefCell<files::Files>>,
+    named: Named,
+    inbox: Inbox,
+    ctx: egui::Context,
+) -> Services {
     let seq = Rc::new(Cell::new(0u64));
     let ask = {
         let ctx = ctx.clone();
@@ -116,9 +129,25 @@ fn services(pending: browser::Pending, files: Rc<RefCell<files::Files>>, named: 
     let ask = Rc::new(ask);
     let open = ask.clone();
     let save = ask.clone();
+    // Where File › Save As chose to save, written there at once; else the browser asks.
+    let to_chosen = {
+        let (browser, files) = (browser.clone(), files.clone());
+        move |bytes: &[u8]| -> Option<Result<(String, String), String>> {
+            let t = browser.borrow_mut().chosen.take()?;
+            Some(files.borrow_mut().write_new(&t.folder, &t.folder_name, &t.name, t.existing.as_ref(), bytes).map(|uri| (t.name, uri)))
+        }
+    };
+    let to_chosen = Rc::new(to_chosen);
+    let chosen_save = to_chosen.clone();
+    let page_files = files.clone();
     Services {
         open_async: Some(Box::new(move |purpose: &str, id: u64| open(Ask::Open { purpose: purpose.to_string(), id }))),
         host_save: Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
+            if save_as && let Some(written) = chosen_save(bytes) {
+                let (_, uri) = written?;
+                named.borrow_mut().insert(name.to_string(), uri);
+                return Ok(());
+            }
             let uri = if save_as { None } else { named.borrow().get(name).cloned() };
             match uri {
                 Some(uri) => files.borrow_mut().write(&uri, name, bytes),
@@ -128,7 +157,16 @@ fn services(pending: browser::Pending, files: Rc<RefCell<files::Files>>, named: 
                 }
             }
         })),
-        download: Some(Box::new(move |name: &str, bytes: &[u8]| ask(Ask::Save { name: name.to_string(), key: None, bytes: bytes.to_vec() }))),
+        // An export to the folder chosen on File › Save As that couldn't be written asks again.
+        download: Some(Box::new(move |name: &str, bytes: &[u8]| match to_chosen(bytes) {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => {
+                log::warn!("{name}: {e}");
+                ask(Ask::Save { name: name.to_string(), key: None, bytes: bytes.to_vec() });
+            }
+            None => ask(Ask::Save { name: name.to_string(), key: None, bytes: bytes.to_vec() }),
+        })),
+        file_page: Some(Box::new(move |ui: &mut egui::Ui, suggested: Option<&str>| browser.borrow_mut().show_in(ui, suggested, &page_files))),
         inbox: Some(inbox),
         ..Default::default()
     }
@@ -154,12 +192,13 @@ fn android_main(android_app: AndroidApp) {
             files::set_context(&cc.egui_ctx);
             deckcraft_ui_egui::install_ime_pass_hooks(&cc.egui_ctx);
             let inbox = Inbox::default();
-            let services = services(pending.clone(), files.clone(), named.clone(), inbox.clone(), cc.egui_ctx.clone());
+            let browser = Rc::new(RefCell::new(browser::Browser::default()));
+            let services = services(pending.clone(), browser.clone(), files.clone(), named.clone(), inbox.clone(), cc.egui_ctx.clone());
             let mut app = SlideApp::new(Session::new(), services);
             if let Err(e) = app.start_for_host() {
                 log::error!("new presentation: {e}");
             }
-            Ok(Box::new(App { app, browser: browser::Browser::default(), pending, files, named, inbox }))
+            Ok(Box::new(App { app, browser, pending, files, named, inbox }))
         }),
     );
     if let Err(e) = result {

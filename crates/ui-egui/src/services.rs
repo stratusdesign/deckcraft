@@ -62,6 +62,11 @@ pub struct Services {
     /// presentation is then that file, and the next Save goes to it. Exports and Print still go
     /// through `download`, which the host also points at the page: they are copies.
     pub host_save: Option<HostSaveFn>,
+    /// Android: draws the host's folder browser inside File › Open and File › Save As, so those
+    /// pages are the browser itself, as in GridCraft. Opening is the host's (the file arrives as
+    /// from `open_async`). Saving passes the suggested name; once the user has chosen a folder and
+    /// a name it returns that name, and the next `host_save` or `download` writes there.
+    pub file_page: Option<Box<dyn Fn(&mut egui::Ui, Option<&str>) -> Option<String>>>,
     pub inbox: Option<Inbox>,
     /// Image on the system clipboard (PNG bytes), when the host can read one.
     pub clipboard_image: Option<Box<dyn FnMut() -> Option<Vec<u8>>>>,

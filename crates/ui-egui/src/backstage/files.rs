@@ -284,6 +284,11 @@ pub(super) fn new_page(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
 
 /// Open: Recent and Browse on the left; the recent presentations (with a search box) on the right.
 pub(super) fn open_page(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
+    // Android: the page is the folder browser (GridCraft's File › Open).
+    if let Some(page) = &app.services.file_page {
+        page(ui, None);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {

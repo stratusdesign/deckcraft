@@ -153,6 +153,43 @@ pub(super) fn save_as(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage, out: 
     dim(ui, path.as_deref().unwrap_or("Not saved yet"));
     ui.add_space(14.0);
     let current = SAVE_TYPES.iter().find(|s| s.0 == bs.file_type).map_or(SAVE_TYPES[0].1, |s| s.1);
+    // Android: the type, then the folder browser with its name box (GridCraft's File › Save As).
+    if app.services.file_page.is_some() {
+        ui.horizontal(|ui| {
+            let label = ui.label("Save as type");
+            craft_ui::ComboBox::from_id_salt("backstage_save_type")
+                .width(340.0)
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (id, label, _) in SAVE_TYPES {
+                        if ui.selectable_label(bs.file_type == id, label).clicked() {
+                            bs.file_type = id;
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+        });
+        if let Some((_, _, detail)) = SAVE_TYPES.iter().find(|s| s.0 == bs.file_type) {
+            dim(ui, detail);
+        }
+        ui.add_space(14.0);
+        let fmt = bs.file_type;
+        let ext = match fmt {
+            "outline" => "txt",
+            "jpeg" => "jpg",
+            f => f,
+        };
+        let suggested = format!("{title}.{ext}");
+        let chosen = app.services.file_page.as_ref().and_then(|page| page(ui, Some(&suggested)));
+        if let Some(name) = chosen {
+            let done = if matches!(fmt, "pptx" | "deckcraft") { app.save_to_host_as(&name).is_ok() } else { app.export_as(fmt, json!({})) };
+            if done {
+                out.close = true;
+            }
+        }
+        return;
+    }
     ui.horizontal(|ui| {
         craft_ui::ComboBox::from_id_salt("backstage_save_type")
             .width(340.0)
