@@ -58,6 +58,71 @@ public class DeckcraftActivity extends NativeActivity {
         return "";
     }
 
+    /** Opens Android's print dialog on a PDF the app wrote (Rust: print::print); deletes it after. */
+    public String printPdf(final String path, final String name) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                android.print.PrintManager pm = (android.print.PrintManager) getSystemService(PRINT_SERVICE);
+                if (pm == null) {
+                    new java.io.File(path).delete();
+                    return;
+                }
+                try {
+                pm.print(name, new android.print.PrintDocumentAdapter() {
+                    @Override
+                    public void onLayout(android.print.PrintAttributes oldAttributes, android.print.PrintAttributes newAttributes,
+                            android.os.CancellationSignal cancel, LayoutResultCallback callback, android.os.Bundle extras) {
+                        if (cancel.isCanceled()) {
+                            callback.onLayoutCancelled();
+                            return;
+                        }
+                        callback.onLayoutFinished(new android.print.PrintDocumentInfo.Builder(name)
+                                .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build(), true);
+                    }
+
+                    @Override
+                    public void onWrite(android.print.PageRange[] pages, final android.os.ParcelFileDescriptor dest,
+                            final android.os.CancellationSignal cancel, final WriteResultCallback callback) {
+                        // Off the main thread: a large PDF would freeze the app while it copies.
+                        new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                write(dest, cancel, callback);
+                            }
+                        }).start();
+                    }
+
+                    private void write(android.os.ParcelFileDescriptor dest, android.os.CancellationSignal cancel, WriteResultCallback callback) {
+                        try (InputStream in = new FileInputStream(path); OutputStream out = new FileOutputStream(dest.getFileDescriptor())) {
+                            byte[] buf = new byte[65536];
+                            int n;
+                            while ((n = in.read(buf)) > 0) {
+                                if (cancel.isCanceled()) {
+                                    callback.onWriteCancelled();
+                                    return;
+                                }
+                                out.write(buf, 0, n);
+                            }
+                            callback.onWriteFinished(new android.print.PageRange[] { android.print.PageRange.ALL_PAGES });
+                        } catch (Exception e) {
+                            callback.onWriteFailed(e.toString());
+                        }
+                    }
+
+                    @Override
+                    public void onFinish() {
+                        new java.io.File(path).delete();
+                    }
+                }, null);
+                } catch (RuntimeException e) {
+                    new java.io.File(path).delete();
+                }
+            }
+        });
+        return "";
+    }
+
     public void pickTree() {
         runOnUiThread(() -> {
             Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);

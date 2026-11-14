@@ -12,6 +12,7 @@ mod browser;
 mod clipboard;
 mod files;
 mod page;
+mod print;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -181,7 +182,7 @@ fn android_main(android_app: AndroidApp) {
     android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("deckcraft"));
     files::set_activity(&android_app);
     let data = android_app.internal_data_path();
-    let files = Rc::new(RefCell::new(files::Files::new(data)));
+    let files = Rc::new(RefCell::new(files::Files::new(data.clone())));
     let pending: browser::Pending = Rc::new(RefCell::new(None));
     let named: Named = Rc::default();
     let options = eframe::NativeOptions {
@@ -197,7 +198,9 @@ fn android_main(android_app: AndroidApp) {
             deckcraft_ui_egui::install_ime_pass_hooks(&cc.egui_ctx);
             let inbox = Inbox::default();
             let browser = Rc::new(RefCell::new(browser::Browser::default()));
-            let services = services(pending.clone(), browser.clone(), files.clone(), named.clone(), inbox.clone(), cc.egui_ctx.clone());
+            let mut services = services(pending.clone(), browser.clone(), files.clone(), named.clone(), inbox.clone(), cc.egui_ctx.clone());
+            let dir = data.clone();
+            services.print = Some(Box::new(move |name: &str, pdf: &[u8]| print::print(dir.as_deref(), name, pdf)));
             let mut app = SlideApp::new(Session::new(), services);
             if let Err(e) = app.start_for_host() {
                 log::error!("new presentation: {e}");

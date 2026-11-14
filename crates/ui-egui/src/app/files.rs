@@ -262,6 +262,17 @@ impl SlideApp {
     pub fn print_pdf(&mut self, params: Value) -> bool {
         let Some((title, doc)) = self.session.active().map(|d| (d.title(), d.doc.clone())) else { return false };
         let mut params = if params.is_object() { params } else { json!({}) };
+        if let Some(print) = self.services.print.as_mut() {
+            let r = deckcraft_engine::cmd::file::pdf_bytes(&doc, &params).map_err(|e| e.to_string()).and_then(|b| print(&format!("{title}.pdf"), &b[..]));
+            match r {
+                Ok(()) => self.set_status("Opened the print dialog"),
+                Err(e) => {
+                    self.set_status(format!("Couldn't print: {e}"));
+                    return false;
+                }
+            }
+            return true;
+        }
         if self.services.pick_save.is_none() {
             // Web: the browser hands the PDF to the user.
             let bytes = deckcraft_engine::cmd::file::pdf_bytes(&doc, &params);
