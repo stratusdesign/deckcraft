@@ -29,11 +29,10 @@ pub use info::{SAVE_TYPES, format_bytes};
 use print::{export, print};
 pub use print::{print_page_size, print_params, print_slides};
 
-/// Width of the side menu.
-pub const NAV_W: f32 = 160.0;
-/// Height of a side-menu entry (the back arrow's row is a little taller).
-const ITEM_H: f32 = 40.0;
-const BACK_H: f32 = 46.0;
+/// Width of the side menu (GridCraft's).
+pub const NAV_W: f32 = 196.0;
+/// Height of a side-menu entry (GridCraft's).
+const ITEM_H: f32 = 38.0;
 /// The widest a page's content grows.
 const CONTENT_W: f32 = 1180.0;
 
@@ -237,10 +236,10 @@ struct Outcome {
     page: Option<Page>,
 }
 
-/// Colours of the side menu and the page, from the theme: the menu sits a step darker than the
-/// page, as in PowerPoint.
+/// Colours of the side menu and the page, from the theme: the menu is the app's colour, as
+/// GridCraft's is.
 fn colours(t: &Tokens) -> (Color32, Color32) {
-    (t.chrome, t.card)
+    (t.accent, t.card)
 }
 
 /// Runs a side-menu action. Returns the page to show, or None to close the view (Some(current)
@@ -329,49 +328,24 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
     let (nav_bg, page_bg) = colours(&t);
     let mut out = Outcome::default();
     let (top, bottom) = entries(has_doc);
-    egui::Panel::left("backstage_nav").exact_size(NAV_W).resizable(false).frame(egui::Frame::NONE.fill(nav_bg)).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        if has_doc {
-            let (r, resp) = ui.allocate_exact_size(vec2(NAV_W, BACK_H), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Back"));
-            let hovered = resp.hovered();
-            if hovered {
-                ui.painter().rect_filled(Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(34.0, 34.0)), 17.0, t.hover);
-            }
-            icons::paint(
-                ui.painter(),
-                Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(22.0, 22.0)),
-                Icon::BackCircle,
-                t.text,
-                false,
-            );
-            if resp.on_hover_text("Back (Esc)").clicked() {
+    egui::Panel::left("backstage_nav")
+        .exact_size(NAV_W)
+        .resizable(false)
+        .frame(egui::Frame::NONE.fill(nav_bg).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 10 }))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            // Back, as on GridCraft's File pages (with nothing open there is nothing to go back to).
+            let back = nav_row(ui, Icon::BackCircle, "Back", false, false, &t);
+            if back.on_hover_text("Back (Esc)").clicked() && has_doc {
                 out.close = true;
             }
-        } else {
-            ui.add_space(BACK_H);
-        }
-        let mut index = 0;
-        for (k, nav) in top.iter().enumerate() {
-            if k == 3 {
-                separator(ui, &t);
-            }
-            if nav_item(ui, *nav, &bs, index, &t).clicked() {
-                bs.focus = None;
-                commit_props(app, &bs);
-                match act(app, *nav, bs.page) {
-                    None => out.close = true,
-                    Some(p) => out.page = Some(p),
+            ui.add_space(10.0);
+            let mut index = 0;
+            for (k, nav) in top.iter().enumerate() {
+                if k == 3 {
+                    separator(ui, &t);
                 }
-            }
-            index += 1;
-        }
-        let first_bottom = index;
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            ui.add_space(8.0);
-            // Bottom-up: draw the last entry first.
-            for (k, nav) in bottom.iter().enumerate().rev() {
-                if nav_item(ui, *nav, &bs, first_bottom + k, &t).clicked() {
+                if nav_item(ui, *nav, &bs, index, &t).clicked() {
                     bs.focus = None;
                     commit_props(app, &bs);
                     match act(app, *nav, bs.page) {
@@ -379,10 +353,23 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
                         Some(p) => out.page = Some(p),
                     }
                 }
+                index += 1;
             }
-            separator(ui, &t);
+            let first_bottom = index;
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                // Bottom-up: draw the last entry first.
+                for (k, nav) in bottom.iter().enumerate().rev() {
+                    if nav_item(ui, *nav, &bs, first_bottom + k, &t).clicked() {
+                        bs.focus = None;
+                        commit_props(app, &bs);
+                        match act(app, *nav, bs.page) {
+                            None => out.close = true,
+                            Some(p) => out.page = Some(p),
+                        }
+                    }
+                }
+            });
         });
-    });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(page_bg)).show(ui, |ui| {
         // Fields, boxes and buttons sit on the page's own colour: outline them, as PowerPoint does.
         ui.visuals_mut().text_edit_bg_color = Some(t.field_bg);
@@ -393,14 +380,12 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
         w.hovered.bg_stroke = Stroke::new(1.0, t.accent);
         w.active.bg_stroke = Stroke::new(1.0, t.accent);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 48, right: 36, top: 22, bottom: 32 }).show(ui, |ui| {
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
                 // set_max_width can also widen: in a window narrower than CONTENT_W it would push the
                 // page past the right margin and clip the tiles (#1421).
                 ui.set_max_width(ui.available_width().min(CONTENT_W));
-                if bs.page != Page::Home {
-                    ui.label(RichText::new(bs.page.label()).font(theme::bold(22.0)).color(t.text));
-                    ui.add_space(16.0);
-                }
+                ui.label(RichText::new(bs.page.label()).font(theme::font(28.0)).color(t.text));
+                ui.add_space(18.0);
                 // Errors raised on a backstage page (a missing recent file, a failed open) would
                 // otherwise vanish: the status bar only draws once the backstage is closed (#172).
                 // A real label, not painted text, so screen readers see it too.
@@ -435,53 +420,51 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
 
 // ---------------------------------------------------------------- side menu
 
-/// Draw one clickable Backstage navigation row and return its interaction response.
+/// Draw one side-menu entry and return its interaction response.
 fn nav_item(ui: &mut Ui, nav: Nav, bs: &Backstage, index: usize, t: &Tokens) -> egui::Response {
+    nav_row(ui, nav.icon(), nav.label(), nav == Nav::Page(bs.page), bs.focus == Some(index), t)
+}
+
+/// One side-menu row, as GridCraft's: the page shown gets a darker fill and a bar at its edge;
+/// the keyboard focus is outlined.
+fn nav_row(ui: &mut Ui, icon: Icon, label: &str, selected: bool, focused: bool, t: &Tokens) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(NAV_W, ITEM_H), Sense::click());
-    let selected = nav == Nav::Page(bs.page);
-    let label = nav.label();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
+    let (text, sel) = (t.accent_text, Color32::from_black_alpha(46));
     let p = ui.painter();
-    let row = rect.shrink2(vec2(6.0, 1.0));
-    if resp.hovered() {
-        p.rect_filled(row, CornerRadius::same(2), t.hover);
+    if selected {
+        p.rect_filled(rect, 0.0, sel);
+        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, text);
+    } else if resp.hovered() {
+        p.rect_filled(rect, 0.0, sel.gamma_multiply(0.55));
     }
-    if bs.focus == Some(index) || selected {
-        // The current page (and the keyboard focus) is outlined, as in PowerPoint.
-        let ink = if bs.focus == Some(index) { t.text } else { t.border };
-        p.rect_stroke(row, CornerRadius::same(2), Stroke::new(1.0, ink), StrokeKind::Inside);
+    if focused {
+        p.rect_stroke(rect.shrink(1.0), CornerRadius::ZERO, Stroke::new(1.0, text), StrokeKind::Inside);
     }
-    let ink = if selected { t.accent } else { t.text };
-    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 26.0, rect.center().y), vec2(16.0, 16.0)), nav.icon(), ink, false);
-    p.text(pos2(rect.left() + 44.0, rect.center().y), Align2::LEFT_CENTER, label, theme::font(13.0), ink);
+    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(17.0, 17.0)), icon, text, false);
+    p.text(pos2(rect.left() + 50.0, rect.center().y), Align2::LEFT_CENTER, label, theme::font(14.0), text);
     resp
 }
 
 fn separator(ui: &mut Ui, t: &Tokens) {
-    let (rect, _) = ui.allocate_exact_size(vec2(NAV_W, 13.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(NAV_W, 17.0), Sense::hover());
     let y = rect.center().y;
-    ui.painter().line_segment([pos2(rect.left() + 20.0, y), pos2(rect.right() - 14.0, y)], Stroke::new(1.0, t.separator));
+    ui.painter().line_segment([pos2(rect.left() + 20.0, y), pos2(rect.right() - 20.0, y)], Stroke::new(1.0, t.accent_text.gamma_multiply(0.35)));
 }
 
 // ---------------------------------------------------------------- shared pieces
 
+/// A heading inside a page (New, Recent), as GridCraft's.
 fn heading(ui: &mut Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(text).font(theme::bold(16.0)).color(t.text));
+    ui.add_space(6.0);
+    ui.label(RichText::new(text).font(theme::bold(15.0)).color(t.text));
     ui.add_space(8.0);
 }
 
 fn dim(ui: &mut Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(text).font(theme::font(12.5)).color(t.text_dim));
-}
-
-/// A link with an arrow (More themes →): true when clicked.
-fn arrow_link(ui: &mut Ui, text: &str) -> bool {
-    let t = Tokens::get(ui.ctx());
-    ui.add(egui::Label::new(RichText::new(format!("{text}  →")).font(theme::font(12.5)).color(t.accent)).sense(Sense::click()))
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .clicked()
 }
 
 /// A search box; true when its text changed.

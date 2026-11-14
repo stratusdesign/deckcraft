@@ -1,6 +1,6 @@
 use super::{
     Align2, Backstage, CONTENT_W, Color32, CornerRadius, Icon, Outcome, Page, Rect, RichText, Sense, SlideApp, Stroke, StrokeKind, Tokens, Ui, Value,
-    arrow_link, dim, heading, icons, json, pos2, search, theme, vec2,
+    dim, heading, icons, json, pos2, search, theme, vec2,
 };
 
 /// A new-presentation tile: a theme preview drawn in code (or a blank slide) over its name.
@@ -97,7 +97,7 @@ pub fn split_path(path: &str) -> (String, String) {
 fn recent_list(app: &mut SlideApp, ui: &mut Ui, query: &str, limit: usize) {
     let t = Tokens::get(ui.ctx());
     if app.ui.recent.is_empty() {
-        dim(ui, "Presentations you open show up here. Use Open to browse for one.");
+        dim(ui, "No recent presentations yet.");
         return;
     }
     let q = query.trim().to_lowercase();
@@ -203,56 +203,20 @@ pub(super) fn task(ui: &mut Ui, icon: Icon, button: &str, title: &str, detail: &
 
 // ---------------------------------------------------------------- pages
 
-/// Home: DeckCraft's mark, new presentations (the first themes, with a link to New) and recent
-/// presentations (with a link to Open). The same page is the start screen.
-pub(super) fn home(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
-    let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-        crate::dialogs::paint_logo(ui.painter(), r);
-        ui.label(RichText::new("DeckCraft").font(theme::bold(24.0)).color(t.text));
-    });
-    ui.add_space(18.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("New").font(theme::bold(16.0)).color(t.text));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if arrow_link(ui, "More themes") {
-                out.page = Some(Page::New);
-            }
-        });
-    });
-    ui.add_space(6.0);
-    new_tiles(app, ui, "", 5, true);
+/// Home, as GridCraft's: New (a blank presentation and the first themes), then Recent. The same
+/// page is the start screen.
+pub(super) fn home(app: &mut SlideApp, ui: &mut Ui, _bs: &mut Backstage, out: &mut Outcome) {
+    heading(ui, "New");
+    new_tiles(app, ui, "", 4, true);
     ui.add_space(22.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Templates").font(theme::bold(16.0)).color(t.text));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if arrow_link(ui, "More templates") {
-                out.page = Some(Page::New);
-            }
-        });
-    });
-    ui.add_space(6.0);
-    template_tiles(app, ui, "", 3);
-    ui.add_space(22.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Recent").font(theme::bold(16.0)).color(t.text));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            search(ui, &mut bs.query, "Search for a file", 280.0);
-        });
-    });
-    ui.add_space(6.0);
-    recent_list(app, ui, &bs.query.clone(), 8);
+    heading(ui, "Recent");
+    recent_list(app, ui, "", 8);
     if app.ui.recent.len() > 8 {
         ui.add_space(6.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            if arrow_link(ui, "More presentations") {
-                out.page = Some(Page::Open);
-            }
-        });
+        if ui.link("More presentations").clicked() {
+            out.page = Some(Page::Open);
+        }
     }
-    ui.add_space(30.0);
-    ui.hyperlink_to("Join the ArtCraft community on Discord", deckcraft_engine::links::DISCORD);
 }
 
 /// New: a blank presentation, then every theme and starter template, with a search box.
