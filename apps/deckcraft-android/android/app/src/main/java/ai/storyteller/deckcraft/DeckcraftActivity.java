@@ -41,6 +41,23 @@ public class DeckcraftActivity extends NativeActivity {
     }
 
     /** Add a location: the user picks a folder DeckCraft may use (My files, Drive, …). */
+    /** The text on the clipboard, "" when it holds none (Rust: clipboard::get). */
+    public String clipboardText() {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm == null) return "";
+        android.content.ClipData clip = cm.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) return "";
+        CharSequence t = clip.getItemAt(0).coerceToText(this);
+        return t == null ? "" : t.toString();
+    }
+
+    /** Puts text on the clipboard, for other apps to paste (Rust: clipboard::set). */
+    public String setClipboardText(String text) {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("text", text));
+        return "";
+    }
+
     public void pickTree() {
         runOnUiThread(() -> {
             Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);

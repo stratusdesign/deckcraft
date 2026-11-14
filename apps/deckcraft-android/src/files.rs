@@ -67,7 +67,7 @@ pub extern "system" fn Java_ai_storyteller_deckcraft_DeckcraftActivity_nativePic
 
 /// Calls a method of the activity with string arguments; its string answer (empty for none).
 /// `None` when the call failed (logged). Every Java reference made is freed before returning.
-fn call(method: &str, sig: &str, strings: &[&str]) -> Option<String> {
+pub(crate) fn call(method: &str, sig: &str, strings: &[&str]) -> Option<String> {
     let activity = ACTIVITY.load(Ordering::SeqCst);
     if activity == 0 {
         return None;

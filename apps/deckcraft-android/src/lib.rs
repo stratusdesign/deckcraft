@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod browser;
+mod clipboard;
 mod files;
 mod page;
 
@@ -31,6 +32,7 @@ struct App {
     files: Rc<RefCell<files::Files>>,
     named: Named,
     inbox: Inbox,
+    clip: clipboard::Bridge,
 }
 
 fn push(inbox: &Inbox, event: InboxEvent) {
@@ -87,6 +89,7 @@ impl eframe::App for App {
         self.app.logic(ctx);
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.clip.input(raw);
         self.app.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -100,6 +103,7 @@ impl eframe::App for App {
         if let Some(done) = done {
             self.done(done);
         }
+        self.clip.output(ui.ctx());
     }
     fn on_exit(&mut self) {
         let _ = self.files.borrow_mut().sync_back();
@@ -198,7 +202,7 @@ fn android_main(android_app: AndroidApp) {
             if let Err(e) = app.start_for_host() {
                 log::error!("new presentation: {e}");
             }
-            Ok(Box::new(App { app, browser, pending, files, named, inbox }))
+            Ok(Box::new(App { app, browser, pending, files, named, inbox, clip: clipboard::Bridge::default() }))
         }),
     );
     if let Err(e) = result {
