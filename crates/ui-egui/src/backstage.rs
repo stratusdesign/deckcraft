@@ -335,7 +335,7 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             // Back, as on GridCraft's File pages (with nothing open there is nothing to go back to).
-            let back = nav_row(ui, Icon::BackCircle, "Back", false, false, &t);
+            let back = ui.add_enabled_ui(has_doc, |ui| nav_row(ui, Icon::BackCircle, "Back", false, false, &t)).inner;
             if back.on_hover_text("Back (Esc)").clicked() && has_doc {
                 out.close = true;
             }
@@ -429,13 +429,15 @@ fn nav_item(ui: &mut Ui, nav: Nav, bs: &Backstage, index: usize, t: &Tokens) -> 
 /// the keyboard focus is outlined.
 fn nav_row(ui: &mut Ui, icon: Icon, label: &str, selected: bool, focused: bool, t: &Tokens) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(NAV_W, ITEM_H), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
-    let (text, sel) = (t.accent_text, Color32::from_black_alpha(46));
+    let on = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, selected, label));
+    let sel = Color32::from_black_alpha(46);
+    let text = if on { t.accent_text } else { t.accent_text.gamma_multiply(0.45) };
     let p = ui.painter();
     if selected {
         p.rect_filled(rect, 0.0, sel);
         p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, text);
-    } else if resp.hovered() {
+    } else if on && resp.hovered() {
         p.rect_filled(rect, 0.0, sel.gamma_multiply(0.55));
     }
     if focused {
